@@ -20,6 +20,10 @@ Claude Code  ──▶  localhost:8181 (proxy)  ──▶  upstream relay
 
 **Extra tools** (TodoWrite, WebSearch, Agent, MCP tools, etc.) are converted to a `<tool_call>` text protocol — injected into the system prompt with their schemas, and results are wrapped in `<tool_result>` blocks.
 
+**4-Step JSON Repair** — recovers malformed JSON in tool calls (literal newlines, unescaped characters, missing/stray brackets) so complex edits and multi-agent calls never get silently dropped.
+
+**Token Saving & Timeout Protection** — truncates massive tool output bursts and bounds history to prevent Cloudflare 524 timeouts and unnecessary token burn.
+
 **Usage correction** — the relay pads input token counts, which makes Claude Code think the context window is full. The proxy rewrites usage to realistic estimates.
 
 ## Requirements

@@ -41,7 +41,10 @@ if _extra:
 REV_MAP = {v: k for k, v in NAME_MAP.items()}
 
 CALL_RE = re.compile(r'<tool_call\s+name="([^"]+)"\s*>(.*?)</tool_call>', re.DOTALL)
-DESC_LIMIT = 2500
+# Token saving budgets (cuts down 524 timeouts and token burn)
+MAX_HISTORY_CHARS = int(os.environ.get("MAX_HISTORY_CHARS", "240000"))  # ~60k tokens safe ceiling; 0 = unlimited
+MAX_TOOL_RESULT_CHARS = int(os.environ.get("MAX_TOOL_RESULT_CHARS", "6000"))  # Truncate giant outputs; 0 = unlimited
+DESC_LIMIT = int(os.environ.get("DESC_LIMIT", "300"))  # Compact tool descriptions to save prompt tokens
 
 # Usage rewriting: the relay pads input usage (a 6-char message reports ~20k
 # input tokens), and clients read usage as context occupancy -- inflated numbers
@@ -49,6 +52,122 @@ DESC_LIMIT = 2500
 # own estimate by this band before we rewrite it; tokenizer variance fits inside.
 USAGE_BAND = 1.25
 USAGE_MARGIN = 4096
+
+
+# --------------------------------------------------------------------------- #
+# JSON repair -- recovers tool calls with unescaped newlines/quotes or stray brackets
+# --------------------------------------------------------------------------- #
+_VALID_ESC = set('"\\/bfnrt')
+
+def _repair_json_text(s):
+    out = []
+    i, n = 0, len(s)
+    in_str = False
+    while i < n:
+        c = s[i]
+        if in_str:
+            if c == "\\":
+                nxt = s[i + 1] if i + 1 < n else ""
+                if nxt in _VALID_ESC:
+                    out.append(c)
+                    out.append(nxt)
+                    i += 2
+                elif nxt == "u" and re.fullmatch(r"[0-9a-fA-F]{4}", s[i + 2:i + 6] or ""):
+                    out.append(s[i:i + 6])
+                    i += 6
+                else:
+                    out.append("\\\\")
+                    i += 1
+                continue
+            out.append(c)
+            if c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c)
+            i += 1
+            continue
+        if c == ",":
+            j = i + 1
+            while j < n and s[j] in " \t\r\n":
+                j += 1
+            if j < n and s[j] in "}]":
+                i += 1  # drop trailing comma
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _extract_balanced_json(s):
+    start = s.find("{")
+    if start < 0:
+        return None
+    pairs = {"}": "{", "]": "["}
+    buf, stack = [], []
+    in_str = esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            buf.append(ch)
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            buf.append(ch)
+        elif ch in "{[":
+            stack.append(ch)
+            buf.append(ch)
+        elif ch in "}]":
+            if stack and stack[-1] == pairs[ch]:
+                stack.pop()
+                buf.append(ch)
+                if not stack:
+                    return "".join(buf)
+            else:
+                continue
+        else:
+            buf.append(ch)
+    if stack:
+        for c in reversed(stack):
+            buf.append("}" if c == "{" else "]")
+        return "".join(buf)
+    return None
+
+
+def loads_tool_json(raw):
+    """Parse JSON inside tool calls using 4-step repair to rescue malformed JSON."""
+    if not raw or not raw.strip():
+        return None
+    repaired = _repair_json_text(raw)
+    candidates = [raw]
+    if repaired != raw:
+        candidates.append(repaired)
+    for src in (raw, repaired):
+        ext = _extract_balanced_json(src)
+        if ext and ext not in candidates:
+            candidates.append(ext)
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+        try:
+            obj = json.loads(cand, strict=False)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    return None
 
 
 REDACTED = "[REDACTED]"
@@ -187,13 +306,18 @@ def convert_messages(messages, emulated_ids):
                 tid = b.get("tool_use_id")
                 if tid in emulated_ids:
                     err = ' error="true"' if b.get("is_error") else ""
+                    raw_res = flatten_result(b.get("content"))
+                    if MAX_TOOL_RESULT_CHARS > 0 and len(raw_res) > MAX_TOOL_RESULT_CHARS:
+                        raw_res = raw_res[:MAX_TOOL_RESULT_CHARS] + f"\n... [truncated to save tokens, {len(raw_res)} total chars]"
                     emu_results.append({"type": "text", "text":
                         f'<tool_result name="{emulated_ids[tid]}" id="{tid}"{err}>\n'
-                        f'{flatten_result(b.get("content"))}\n</tool_result>'})
+                        f'{raw_res}\n</tool_result>'})
                 else:
                     nb = dict(b)
                     if isinstance(nb.get("content"), list):
                         nb["content"] = clean_inner(nb["content"])
+                    elif isinstance(nb.get("content"), str) and MAX_TOOL_RESULT_CHARS > 0 and len(nb["content"]) > MAX_TOOL_RESULT_CHARS:
+                        nb["content"] = nb["content"][:MAX_TOOL_RESULT_CHARS] + f"\n... [truncated, {len(nb['content'])} chars]"
                     results.append(nb)
             else:
                 others.append(b)
@@ -281,7 +405,20 @@ def sanitize(body, aggressive=False):
         out.pop("tools", None)
         out.pop("tool_choice", None)
 
-    out["messages"] = convert_messages(out.get("messages", []), emulated_ids)
+    msgs = convert_messages(out.get("messages", []), emulated_ids)
+    if MAX_HISTORY_CHARS > 0 and len(msgs) > 2:
+        # Measure approximate JSON character length of conversation
+        chars = len(json.dumps(msgs, ensure_ascii=False))
+        if chars > MAX_HISTORY_CHARS:
+            # Keep first user message (has original system task) and trim oldest middle messages
+            first_msg = msgs[0]
+            tail = msgs[1:]
+            while tail and len(json.dumps([first_msg] + tail, ensure_ascii=False)) > MAX_HISTORY_CHARS and len(tail) > 2:
+                tail.pop(0)
+            msgs = [first_msg] + tail
+            log(f"trimmed message history to {len(msgs)} messages ({MAX_HISTORY_CHARS} chars budget)")
+
+    out["messages"] = msgs
     out["stream"] = False
     return out
 
@@ -307,12 +444,9 @@ def parse_response(msg, emulated_names):
                 name = m.group(1)
                 if name not in emulated_names:
                     continue
-                try:
-                    inp = json.loads(m.group(2).strip())
-                except Exception:
+                inp = loads_tool_json(m.group(2).strip())
+                if inp is None or not isinstance(inp, dict):
                     log(f"BAD JSON in tool_call {name}: {head(m.group(2), 200)}")
-                    continue
-                if not isinstance(inp, dict):
                     continue
                 pre = text[pos:m.start()]
                 if pre.strip():
