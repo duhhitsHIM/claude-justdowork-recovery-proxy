@@ -73,6 +73,20 @@ If you prefer to configure manually:
    ```
    > **Important:** `ENABLE_TOOL_SEARCH` must be `"false"` — the proxy relies on this.
 
+## Use in Claude Desktop (GUI / CC Switch)
+
+If you use Claude Desktop with custom gateway switching (CC Switch):
+
+1. Start the proxy via `setup.bat`.
+2. In your Claude Desktop settings GUI, configure your Gateway / CC Switch profile:
+   - **Base URL / Gateway**: `http://127.0.0.1:8181`
+   - **Auth Scheme**: `bearer`
+   - **API Key**: Any dummy value (e.g. `justdowork` — the proxy attaches your real key)
+   - **Model**: `claude-opus-4-8`
+3. Save and use Claude Desktop normally!
+
+To switch back to AgentRouter or any other provider, just change the Base URL back to your provider's URL in the GUI.
+
 ## Verify
 
 Right-click the tray icon to check status, view logs, restart the proxy, or exit.
