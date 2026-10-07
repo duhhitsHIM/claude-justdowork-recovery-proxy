@@ -133,16 +133,25 @@ if (-not $SkipSettings) {
         }
     }
 
-    if (-not $settingsObj.env) {
+    if (-not $settingsObj.PSObject.Properties['env']) {
         $settingsObj | Add-Member -NotePropertyName "env" -NotePropertyValue ([ordered]@{}) -Force
     }
 
-    # Set required proxy environment variables
-    $settingsObj.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:8181"
-    $settingsObj.env.ANTHROPIC_MODEL = $Model
-    $settingsObj.env.ENABLE_TOOL_SEARCH = "false"
-    if (-not $settingsObj.env.ANTHROPIC_API_KEY) {
-        $settingsObj.env.ANTHROPIC_API_KEY = "justdowork"
+    # Set required proxy environment variables safely on PSCustomObject
+    $envProps = @{
+        "ANTHROPIC_BASE_URL" = "http://127.0.0.1:8181"
+        "ANTHROPIC_MODEL" = $Model
+        "ENABLE_TOOL_SEARCH" = "false"
+    }
+    foreach ($k in $envProps.Keys) {
+        if ($settingsObj.env.PSObject.Properties[$k]) {
+            $settingsObj.env.$k = $envProps[$k]
+        } else {
+            $settingsObj.env | Add-Member -NotePropertyName $k -NotePropertyValue $envProps[$k] -Force
+        }
+    }
+    if (-not $settingsObj.env.PSObject.Properties["ANTHROPIC_API_KEY"]) {
+        $settingsObj.env | Add-Member -NotePropertyName "ANTHROPIC_API_KEY" -NotePropertyValue "justdowork" -Force
     }
 
     $newJson = $settingsObj | ConvertTo-Json -Depth 10
