@@ -91,10 +91,9 @@ if (-not $ApiKey) {
 }
 
 if (-not $ApiKey) {
-    Write-Host "`nEnter your JustDoWork API Key (hidden input): " -ForegroundColor Yellow -NoNewline
-    $sec = Read-Host -AsSecureString
-    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
-    $ApiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    Write-Host "`nEnter your JustDoWork API Key (paste with Ctrl+V or Right-Click): " -ForegroundColor Yellow -NoNewline
+    $rawKey = Read-Host
+    $ApiKey = $rawKey.Trim()
     Write-Host ""
 }
 
