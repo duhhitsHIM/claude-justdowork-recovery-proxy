@@ -519,6 +519,18 @@ def health():
     return {"status": "ok", "service": "claude-justdowork-recovery-proxy", "version": "1.0.0"}
 
 
+@app.route("/v1/models", methods=["GET"])
+def models():
+    return {
+        "data": [
+            {"id": "claude-opus-4-8", "object": "model", "display_name": "Claude Opus 4.8"},
+            {"id": "claude-sonnet-4-5", "object": "model", "display_name": "Claude Sonnet 4.5"},
+            {"id": "claude-haiku-4-5", "object": "model", "display_name": "Claude Haiku 4.5"}
+        ],
+        "object": "list"
+    }
+
+
 @app.route("/v1/messages", methods=["POST"])
 def proxy():
     counter["n"] += 1
