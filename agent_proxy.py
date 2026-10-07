@@ -18,7 +18,14 @@ for _s in (sys.stdout, sys.stderr):
 app = Flask(__name__)
 
 TARGET = os.environ.get("TARGET_URL", "https://api.justwoker.icu").rstrip("/")
-KEY = re.sub(r"[^\x21-\x7e]", "", os.environ.get("UPSTREAM_API_KEY", ""))
+_key_from_env = os.environ.get("UPSTREAM_API_KEY", "")
+if not _key_from_env and os.path.exists("key.txt"):
+    try:
+        with open("key.txt", encoding="utf-8") as _kf:
+            _key_from_env = _kf.read().strip()
+    except Exception:
+        pass
+KEY = re.sub(r"[^\x21-\x7e]", "", _key_from_env)
 PORT = int(os.environ.get("PORT", "8181"))
 LOG = "debug_log.txt"
 DUMP_DIR = "debug_dump"
