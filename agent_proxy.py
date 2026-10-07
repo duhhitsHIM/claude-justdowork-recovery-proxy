@@ -407,13 +407,15 @@ def sanitize(body, aggressive=False):
 
     msgs = convert_messages(out.get("messages", []), emulated_ids)
     if MAX_HISTORY_CHARS > 0 and len(msgs) > 2:
-        # Measure approximate JSON character length of conversation
         chars = len(json.dumps(msgs, ensure_ascii=False))
         if chars > MAX_HISTORY_CHARS:
-            # Keep first user message (has original system task) and trim oldest middle messages
+            # Keep first user message and preserve valid conversation structure
             first_msg = msgs[0]
             tail = msgs[1:]
             while tail and len(json.dumps([first_msg] + tail, ensure_ascii=False)) > MAX_HISTORY_CHARS and len(tail) > 2:
+                tail.pop(0)
+            # Ensure the trimmed tail starts with a user turn if first_msg is followed by assistant
+            if tail and tail[0].get("role") == "assistant" and len(tail) > 1:
                 tail.pop(0)
             msgs = [first_msg] + tail
             log(f"trimmed message history to {len(msgs)} messages ({MAX_HISTORY_CHARS} chars budget)")
