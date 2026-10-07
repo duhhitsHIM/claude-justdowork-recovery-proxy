@@ -20,13 +20,38 @@ Write-Host "`n========================================================" -Foregro
 Write-Host "   Claude JustDoWork Recovery Proxy - 1-Click Setup" -ForegroundColor Cyan
 Write-Host "========================================================`n" -ForegroundColor Cyan
 
-# 1. Check Python
+# 1. Check Python (prefer py launcher or valid python, avoiding Windows Store dummy shim)
 $pythonCmd = $null
-if (Get-Command python -ErrorAction SilentlyContinue) {
-    $pythonCmd = "python"
-} elseif (Get-Command py -ErrorAction SilentlyContinue) {
-    $pythonCmd = "py"
-} else {
+$candidates = @("py", "python", "python3")
+foreach ($c in $candidates) {
+    try {
+        $testOut = & $c -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $testOut) {
+            $pythonCmd = $c
+            break
+        }
+    } catch {}
+}
+
+if (-not $pythonCmd) {
+    # Check common user install paths directly as fallback
+    $commonPaths = @(
+        "$HOME\AppData\Local\Programs\Python\Python313\python.exe",
+        "$HOME\AppData\Local\Programs\Python\Python312\python.exe",
+        "$HOME\AppData\Local\Programs\Python\Python311\python.exe",
+        "$HOME\AppData\Local\Programs\Python\Python310\python.exe",
+        "C:\Python313\python.exe",
+        "C:\Python312\python.exe"
+    )
+    foreach ($p in $commonPaths) {
+        if (Test-Path $p) {
+            $pythonCmd = $p
+            break
+        }
+    }
+}
+
+if (-not $pythonCmd) {
     Write-Host "[X] Python is not installed or not in PATH." -ForegroundColor Red
     Write-Host "    Please install Python 3.8+ from python.org and re-run.`n"
     Pause
